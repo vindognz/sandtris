@@ -6,3 +6,4 @@ adding holds maybe idk
 pause
 rotating the other way :skull:
 making restarting lmao
+make it way higher res so the particle simulation is cleaner
