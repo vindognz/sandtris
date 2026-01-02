@@ -8,6 +8,10 @@ WIDTH, HEIGHT = 300, 600
 BLOCK_SIZE = 20
 GRID_WIDTH = WIDTH // BLOCK_SIZE
 GRID_HEIGHT = HEIGHT // BLOCK_SIZE
+GRAIN_SIZE = 2  # 2x2 pixels per grain
+GRAINS_PER_BLOCK = BLOCK_SIZE // GRAIN_SIZE  # 10 grains per block
+GRAIN_GRID_WIDTH = GRID_WIDTH * GRAINS_PER_BLOCK
+GRAIN_GRID_HEIGHT = GRID_HEIGHT * GRAINS_PER_BLOCK
 FPS = 60
 
 # Colors
@@ -17,10 +21,12 @@ WHITE = (255, 255, 255)
 
 # 4 color palette
 COLORS = [
-    (255, 100, 100),  # Red
-    (100, 150, 255),  # Blue
-    (100, 255, 150),  # Green
-    (255, 220, 100),  # Yellow
+    (210, 50, 50),  # Red
+    #(255, 150, 0), # Orange
+    (100, 150, 255), # Blue
+    (100, 255, 150), # Green
+    (255, 220, 100), # Yellow
+    #(128, 0, 128),   # Purple
 ]
 
 # Tetromino shapes
@@ -65,27 +71,27 @@ class Piece:
         self.shape = rotateTable(self.shape)
 
 
-class SandParticle:
+class SandGrain:
     def __init__(self, x, y, color):
         self.x = x
         self.y = y
-        self.color = color
+        self.color = tuple(max(0, min(255, c + random.randint(-15, 15))) for c in color)
 
 
 class ClearParticle:
     def __init__(self, x, y, color):
-        self.x = x * BLOCK_SIZE + BLOCK_SIZE // 2
-        self.y = y * BLOCK_SIZE + BLOCK_SIZE // 2
+        self.x = x * GRAIN_SIZE + GRAIN_SIZE // 2
+        self.y = y * GRAIN_SIZE + GRAIN_SIZE // 2
         self.vx = random.uniform(-4, 4)
         self.vy = random.uniform(-6, -2)
         self.color = color
         self.life = 40
-        self.size = random.randint(5, 10)
+        self.size = random.randint(3, 6)
     
     def update(self):
         self.x += self.vx
         self.y += self.vy
-        self.vy += 0.3  # gravity
+        self.vy += 0.3
         self.life -= 1
         return self.life > 0
     
@@ -102,7 +108,8 @@ class Game:
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Sand Tetris")
         self.clock = pygame.time.Clock()
-        self.grid = [[None for _ in range(GRID_WIDTH)] for _ in range(GRID_HEIGHT)]
+        # Grain-level grid
+        self.grain_grid = [[None for _ in range(GRAIN_GRID_WIDTH)] for _ in range(GRAIN_GRID_HEIGHT)]
         
         self.bag = makeBag()
         self.current_piece = self.fromBag()
@@ -121,7 +128,8 @@ class Game:
         self.clearing = False
         self.clear_queue = []
         self.clear_timer = 0
-        self.clear_speed = 2
+        self.clear_flash_duration = 20  # Total flash frames
+        self.clear_flash_count = 0
         
         self.particles = []
         self.clears = 0
@@ -136,12 +144,18 @@ class Game:
         return Piece(shape_id)
 
     def checkCollision(self, piece, offset_x=0, offset_y=0):
-        for x, y in piece.getBlocks():
-            new_x, new_y = x + offset_x, y + offset_y
+        for bx, by in piece.getBlocks():
+            new_x, new_y = bx + offset_x, by + offset_y
             if new_x < 0 or new_x >= GRID_WIDTH or new_y >= GRID_HEIGHT:
                 return True
-            if new_y >= 0 and self.grid[new_y][new_x] is not None:
-                return True
+            if new_y >= 0:
+                # Check if any grain in this block position is occupied
+                for gy in range(GRAINS_PER_BLOCK):
+                    for gx in range(GRAINS_PER_BLOCK):
+                        grain_x = new_x * GRAINS_PER_BLOCK + gx
+                        grain_y = new_y * GRAINS_PER_BLOCK + gy
+                        if self.grain_grid[grain_y][grain_x] is not None:
+                            return True
         return False
 
     def getGhostY(self):
@@ -151,10 +165,14 @@ class Game:
         return ghost_y
 
     def lockPiece(self):
-        for x, y in self.current_piece.getBlocks():
-            if y >= 0:
-                particle = SandParticle(x, y, self.current_piece.color)
-                self.grid[y][x] = particle
+        for bx, by in self.current_piece.getBlocks():
+            if by >= 0:
+                # Create 10x10 grains for this block
+                for gy in range(GRAINS_PER_BLOCK):
+                    for gx in range(GRAINS_PER_BLOCK):
+                        grain_x = bx * GRAINS_PER_BLOCK + gx
+                        grain_y = by * GRAINS_PER_BLOCK + gy
+                        self.grain_grid[grain_y][grain_x] = SandGrain(grain_x, grain_y, self.current_piece.color)
             else:
                 self.game_over = True
                 return
@@ -168,23 +186,23 @@ class Game:
     def updateSand(self):
         moved = False
         
-        for y in range(GRID_HEIGHT - 1, -1, -1):
-            for x in range(GRID_WIDTH):
-                particle = self.grid[y][x]
-                if particle is None:
+        for y in range(GRAIN_GRID_HEIGHT - 1, -1, -1):
+            for x in range(GRAIN_GRID_WIDTH):
+                grain = self.grain_grid[y][x]
+                if grain is None:
                     continue
                 
                 # Check straight down
-                if y + 1 < GRID_HEIGHT and self.grid[y + 1][x] is None:
-                    self.grid[y][x] = None
-                    self.grid[y + 1][x] = particle
-                    particle.y += 1
+                if y + 1 < GRAIN_GRID_HEIGHT and self.grain_grid[y + 1][x] is None:
+                    self.grain_grid[y][x] = None
+                    self.grain_grid[y + 1][x] = grain
+                    grain.y += 1
                     moved = True
                     continue
                 
                 # Check diagonals
-                can_left = x > 0 and y + 1 < GRID_HEIGHT and self.grid[y + 1][x - 1] is None
-                can_right = x < GRID_WIDTH - 1 and y + 1 < GRID_HEIGHT and self.grid[y + 1][x + 1] is None
+                can_left = x > 0 and y + 1 < GRAIN_GRID_HEIGHT and self.grain_grid[y + 1][x - 1] is None
+                can_right = x < GRAIN_GRID_WIDTH - 1 and y + 1 < GRAIN_GRID_HEIGHT and self.grain_grid[y + 1][x + 1] is None
                 
                 if can_left and can_right:
                     direction = random.choice([-1, 1])
@@ -195,23 +213,21 @@ class Game:
                 else:
                     continue
                 
-                self.grid[y][x] = None
-                self.grid[y + 1][x + direction] = particle
-                particle.x += direction
-                particle.y += 1
+                self.grain_grid[y][x] = None
+                self.grain_grid[y + 1][x + direction] = grain
+                grain.x += direction
+                grain.y += 1
                 moved = True
         
         return moved
 
-    def findConnectedPath(self, start_x, start_y, color, visited=None):
-        """Find all tiles connected to start position with same color using BFS (including diagonals)"""
-        if visited is None:
-            visited = []
+    def findConnectedPath(self, start_x, start_y, color):
+        """Find all grains connected to start position with same base color using BFS"""
+        if self.grain_grid[start_y][start_x] is None:
+            return []
         
-        if self.grid[start_y][start_x] is None or self.grid[start_y][start_x].color != color:
-            return visited
-        
-        # BFS to maintain order for animation
+        target_color = color
+        visited = []
         queue = [(start_x, start_y)]
         seen = {(start_x, start_y)}
         
@@ -219,14 +235,18 @@ class Game:
             x, y = queue.pop(0)
             visited.append((x, y))
             
-            # Check all 8 directions (including diagonals)
+            # Check all 8 directions
             for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:
                 nx, ny = x + dx, y + dy
                 if (nx, ny) in seen:
                     continue
-                if nx < 0 or nx >= GRID_WIDTH or ny < 0 or ny >= GRID_HEIGHT:
+                if nx < 0 or nx >= GRAIN_GRID_WIDTH or ny < 0 or ny >= GRAIN_GRID_HEIGHT:
                     continue
-                if self.grid[ny][nx] is None or self.grid[ny][nx].color != color:
+                if self.grain_grid[ny][nx] is None:
+                    continue
+                # Check if base colors match (ignoring variation)
+                grain_base_color = self.grain_grid[ny][nx].color
+                if not self.colorsMatch(grain_base_color, target_color):
                     continue
                 
                 seen.add((nx, ny))
@@ -234,56 +254,60 @@ class Game:
         
         return visited
     
+    def colorsMatch(self, c1, c2):
+        """Check if two colors are close enough (accounting for variation)"""
+        threshold = 30
+        return all(abs(c1[i] - c2[i]) < threshold for i in range(3))
+    
     def clearPaths(self):
         """Clear any color paths that connect left wall to right wall"""
-        # Check each row for potential starting points on the left wall
-        for y in range(GRID_HEIGHT):
-            if self.grid[y][0] is not None:
-                color = self.grid[y][0].color
-                # Find all connected tiles of this color
-                connected = self.findConnectedPath(0, y, color)
+        # Check grains on left wall
+        checked_colors = set()
+        for y in range(GRAIN_GRID_HEIGHT):
+            if self.grain_grid[y][0] is not None:
+                color = self.grain_grid[y][0].color
+                # Avoid checking same color multiple times
+                color_key = (color[0] // 30, color[1] // 30, color[2] // 30)
+                if color_key in checked_colors:
+                    continue
+                checked_colors.add(color_key)
                 
-                # Check if any connected tile reaches the right wall
-                reaches_right = any(x == GRID_WIDTH - 1 for x, _ in connected)
+                connected = self.findConnectedPath(0, y, color)
+                reaches_right = any(x == GRAIN_GRID_WIDTH - 1 for x, _ in connected)
                 
                 if reaches_right:
-                    # Start animated clear
                     self.clearing = True
-                    self.clear_queue = list(reversed(connected))  # Reverse so it starts from the right
+                    self.clear_queue = list(reversed(connected))
                     return True
         
         return False
     
     def updateClearAnimation(self):
-        """Remove tiles one by one from the clear queue"""
+        """Flash white then poof all grains"""
         if not self.clearing:
             return
         
         self.clear_timer += 1
-        if self.clear_timer >= self.clear_speed and self.clear_queue:
+        
+        # After flashing, clear everything
+        if self.clear_timer >= self.clear_flash_duration:
+            for x, y in self.clear_queue:
+                if self.grain_grid[y][x] is not None:
+                    color = self.grain_grid[y][x].color
+                    if random.random() < 0.1:  # Spawn fewer particles
+                        self.particles.append(ClearParticle(x, y, color))
+                self.grain_grid[y][x] = None
+            
+            self.clearing = False
             self.clear_timer = 0
-            x, y = self.clear_queue.pop(0)
-            
-            # Spawn particles before clearing the tile
-            if self.grid[y][x] is not None:
-                color = self.grid[y][x].color
-                for _ in range(5):
-                    self.particles.append(ClearParticle(x, y, color))
-            
-            self.grid[y][x] = None
-            
-            if not self.clear_queue:
-                # Clear animation finished
-                self.clearing = False
-                self.clears += 1
-                # Speed up every 5 clears
-                if self.clears % 5 == 0 and self.drop_speed > 10:
-                    self.drop_speed -= 2
+            self.clear_queue = []
+            self.clears += 1
+            if self.clears % 5 == 0 and self.drop_speed > 10:
+                self.drop_speed -= 2
 
     def handleInput(self):
         keys = pygame.key.get_pressed()
         
-        # Movement
         if not keys[pygame.K_LEFT] and not keys[pygame.K_RIGHT]:
             self.holding_input = False
             self.move_timer = 0
@@ -308,7 +332,6 @@ class Game:
                     self.move_timer = self.move_delay
                 self.holding_input = True
         
-        # Soft drop
         if keys[pygame.K_DOWN]:
             if not self.checkCollision(self.current_piece, offset_y=1):
                 self.current_piece.y += 1
@@ -317,19 +340,19 @@ class Game:
     def draw(self):
         self.screen.fill(BLACK)
         
-        # Draw grid lines
+        # Draw grid lines (every 10 grains = 1 block)
         for y in range(GRID_HEIGHT):
             for x in range(GRID_WIDTH):
                 rect = pygame.Rect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
                 pygame.draw.rect(self.screen, GRAY, rect, 1)
         
-        # Draw sand particles
-        for y in range(GRID_HEIGHT):
-            for x in range(GRID_WIDTH):
-                if self.grid[y][x] is not None:
-                    particle = self.grid[y][x]
-                    rect = pygame.Rect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
-                    pygame.draw.rect(self.screen, particle.color, rect)
+        # Draw sand grains
+        for y in range(GRAIN_GRID_HEIGHT):
+            for x in range(GRAIN_GRID_WIDTH):
+                if self.grain_grid[y][x] is not None:
+                    grain = self.grain_grid[y][x]
+                    rect = pygame.Rect(x * GRAIN_SIZE, y * GRAIN_SIZE, GRAIN_SIZE, GRAIN_SIZE)
+                    pygame.draw.rect(self.screen, grain.color, rect)
         
         # Draw clear particles
         for particle in self.particles:
@@ -344,7 +367,6 @@ class Game:
                     ghost_draw_y = y + (ghost_y - self.current_piece.y)
                     if ghost_draw_y >= 0:
                         rect = pygame.Rect(x * BLOCK_SIZE, ghost_draw_y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
-                        # Draw ghost with transparency
                         ghost_surface = pygame.Surface((BLOCK_SIZE, BLOCK_SIZE))
                         ghost_surface.fill(self.current_piece.color)
                         ghost_surface.set_alpha(80)
@@ -356,7 +378,7 @@ class Game:
                     rect = pygame.Rect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
                     pygame.draw.rect(self.screen, self.current_piece.color, rect)
         
-        # Draw next piece preview (top right)
+        # Draw next piece preview
         preview_x = WIDTH - 100
         preview_y = 20
         font = pygame.font.Font(None, 24)
@@ -374,7 +396,6 @@ class Game:
                     )
                     pygame.draw.rect(self.screen, self.next_piece.color, rect)
         
-        # Game over text
         if self.game_over:
             font = pygame.font.Font(None, 48)
             text = font.render("GAME OVER", True, WHITE)
@@ -395,7 +416,6 @@ class Game:
                         old_shape = self.current_piece.shape
                         self.current_piece.rotate()
                         if self.checkCollision(self.current_piece):
-                            # Wall kick
                             kicked = False
                             for offset in [-1, 1, -2, 2]:
                                 if not self.checkCollision(self.current_piece, offset_x=offset):
@@ -418,15 +438,11 @@ class Game:
                 if self.move_timer > 0:
                     self.move_timer -= 1
                 
-                # Update particles
                 self.particles = [p for p in self.particles if p.update()]
                 
-                # Update clear animation
                 self.updateClearAnimation()
                 
-                # Only update game logic if not clearing
                 if not self.clearing:
-                    # Drop piece
                     self.drop_timer += 1
                     if self.drop_timer >= self.drop_speed:
                         self.drop_timer = 0
@@ -435,13 +451,11 @@ class Game:
                         else:
                             self.lockPiece()
                     
-                    # Update sand physics
                     self.sand_update_counter += 1
                     if self.sand_update_counter >= self.sand_update_speed:
                         self.sand_update_counter = 0
                         sand_moved = self.updateSand()
                         
-                        # Check for clears only after sand has settled
                         if not sand_moved:
                             self.clearPaths()
             
