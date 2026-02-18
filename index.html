@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sand Tetris</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: monospace;
+            color: white;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        
+        #gameContainer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        canvas {
+            border: 2px solid #444;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            touch-action: none;
+        }
+        
+        #mobileControls {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 300px;
+        }
+        
+        .controlRow {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        
+        .controlBtn {
+            background: #333;
+            border: 2px solid #555;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            padding: 15px;
+            min-width: 60px;
+            min-height: 60px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: manipulation;
+            transition: all 0.1s;
+        }
+        
+        .controlBtn:active {
+            background: #555;
+            border-color: #777;
+            transform: scale(0.95);
+        }
+        
+        .controlBtn.wide {
+            flex: 1;
+        }
+        
+        #controls {
+            text-align: center;
+            line-height: 1.6;
+            font-size: 14px;
+            color: #888;
+        }
+        
+        #controls h3 {
+            margin: 0 0 10px 0;
+            color: white;
+        }
+        
+        #stats {
+            font-size: 18px;
+            text-align: center;
+        }
+        
+        @media (max-width: 400px) {
+            body {
+                padding: 10px;
+            }
+            
+            canvas {
+                width: 100%;
+                height: auto;
+            }
+            
+            #mobileControls {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="300" height="600"></canvas>
+        <div id="stats">Clears: <span id="clearCount">0</span></div>
+        
+        <div id="mobileControls">
+            <div class="controlRow">
+                <button class="controlBtn" id="btnRotate">↻</button>
+            </div>
+            <div class="controlRow">
+                <button class="controlBtn" id="btnLeft">←</button>
+                <button class="controlBtn" id="btnDown">↓</button>
+                <button class="controlBtn" id="btnRight">→</button>
+            </div>
+            <div class="controlRow">
+                <button class="controlBtn wide" id="btnDrop">DROP</button>
+            </div>
+            <div class="controlRow">
+                <button class="controlBtn wide" id="btnRestart">RESTART</button>
+            </div>
+        </div>
+        
+        <div id="controls">
+            <h3>Keyboard Controls</h3>
+            <div>← → : Move</div>
+            <div>↑ : Rotate</div>
+            <div>↓ : Soft Drop</div>
+            <div>SPACE : Hard Drop</div>
+            <div>R : Restart</div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Constants
+        const WIDTH = 300;
+        const HEIGHT = 600;
+        const BLOCK_SIZE = 20;
+        const GRID_WIDTH = WIDTH / BLOCK_SIZE;
+        const GRID_HEIGHT = HEIGHT / BLOCK_SIZE;
+        const GRAIN_SIZE = 2;
+        const GRAINS_PER_BLOCK = BLOCK_SIZE / GRAIN_SIZE;
+        const GRAIN_GRID_WIDTH = GRID_WIDTH * GRAINS_PER_BLOCK;
+        const GRAIN_GRID_HEIGHT = GRID_HEIGHT * GRAINS_PER_BLOCK;
+        const FPS = 60;
+        
+        // Colors
+        const BLACK = '#000000';
+        const GRAY = '#282828';
+        const WHITE = '#ffffff';
+        
+        const COLORS = [
+            [210, 50, 50],
+            [100, 150, 255],
+            [100, 255, 150],
+            [255, 220, 100]
+        ];
+        
+        // Tetromino shapes
+        const SHAPES = {
+            'I': [[1, 1, 1, 1]],
+            'O': [[1, 1], [1, 1]],
+            'T': [[1, 1, 1], [0, 1, 0]],
+            'S': [[0, 1, 1], [1, 1, 0]],
+            'Z': [[1, 1, 0], [0, 1, 1]],
+            'J': [[1, 1, 1], [0, 0, 1]],
+            'L': [[1, 1, 1], [1, 0, 0]]
+        };
+        
+        function makeBag() {
+            const bag = Object.keys(SHAPES);
+            for (let i = bag.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [bag[i], bag[j]] = [bag[j], bag[i]];
+            }
+            return bag;
+        }
+        
+        function rotateTable(table) {
+            const rows = table.length;
+            const cols = table[0].length;
+            const rotated = [];
+            for (let i = 0; i < cols; i++) {
+                rotated[i] = [];
+                for (let j = 0; j < rows; j++) {
+                    rotated[i][j] = table[rows - 1 - j][i];
+                }
+            }
+            return rotated;
+        }
+        
+        class Piece {
+            constructor(shapeId) {
+                this.id = shapeId;
+                this.shape = SHAPES[shapeId].map(row => [...row]);
+                this.color = COLORS[Math.floor(Math.random() * COLORS.length)];
+                this.x = Math.floor(GRID_WIDTH / 2 - this.shape[0].length / 2);
+                this.y = 0;
+            }
+            
+            getBlocks() {
+                const blocks = [];
+                for (let rowIdx = 0; rowIdx < this.shape.length; rowIdx++) {
+                    for (let colIdx = 0; colIdx < this.shape[rowIdx].length; colIdx++) {
+                        if (this.shape[rowIdx][colIdx]) {
+                            blocks.push([this.x + colIdx, this.y + rowIdx]);
+                        }
+                    }
+                }
+                return blocks;
+            }
+            
+            rotate() {
+                this.shape = rotateTable(this.shape);
+            }
+        }
+        
+        class SandGrain {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color.map(c => 
+                    Math.max(0, Math.min(255, c + Math.floor(Math.random() * 31) - 15))
+                );
+            }
+        }
+        
+        class ClearParticle {
+            constructor(x, y, color) {
+                this.x = x * GRAIN_SIZE + GRAIN_SIZE / 2;
+                this.y = y * GRAIN_SIZE + GRAIN_SIZE / 2;
+                this.vx = Math.random() * 8 - 4;
+                this.vy = Math.random() * 4 - 6;
+                this.color = color;
+                this.life = 40;
+                this.size = Math.floor(Math.random() * 4) + 3;
+            }
+            
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.3;
+                this.life--;
+                return this.life > 0;
+            }
+            
+            draw(ctx) {
+                const alpha = this.life / 40;
+                ctx.globalAlpha = alpha;
+                ctx.fillStyle = `rgb(${this.color[0]}, ${this.color[1]}, ${this.color[2]})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size / 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+        }
+        
+        class Game {
+            constructor() {
+                this.grainGrid = Array(GRAIN_GRID_HEIGHT).fill(null).map(() => 
+                    Array(GRAIN_GRID_WIDTH).fill(null)
+                );
+                
+                this.bag = makeBag();
+                this.currentPiece = this.fromBag();
+                this.nextPiece = this.fromBag();
+                
+                this.dropTimer = 0;
+                this.dropSpeed = 30;
+                this.moveTimer = 0;
+                this.moveDelay = 16;
+                this.moveRepeatDelay = 6;
+                this.holdingInput = false;
+                
+                this.sandUpdateCounter = 0;
+                this.sandUpdateSpeed = 1;
+                
+                this.clearing = false;
+                this.clearQueue = [];
+                this.clearTimer = 0;
+                this.clearFlashDuration = 20;
+                
+                this.particles = [];
+                this.clears = 0;
+                
+                this.gameOver = false;
+                
+                this.keys = {};
+            }
+            
+            fromBag() {
+                if (this.bag.length === 0) {
+                    this.bag = makeBag();
+                }
+                const shapeId = this.bag.shift();
+                return new Piece(shapeId);
+            }
+            
+            checkCollision(piece, offsetX = 0, offsetY = 0) {
+                for (const [bx, by] of piece.getBlocks()) {
+                    const newX = bx + offsetX;
+                    const newY = by + offsetY;
+                    
+                    if (newX < 0 || newX >= GRID_WIDTH || newY >= GRID_HEIGHT) {
+                        return true;
+                    }
+                    
+                    if (newY >= 0) {
+                        for (let gy = 0; gy < GRAINS_PER_BLOCK; gy++) {
+                            for (let gx = 0; gx < GRAINS_PER_BLOCK; gx++) {
+                                const grainX = newX * GRAINS_PER_BLOCK + gx;
+                                const grainY = newY * GRAINS_PER_BLOCK + gy;
+                                if (this.grainGrid[grainY][grainX] !== null) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+            
+            getGhostY() {
+                let ghostY = this.currentPiece.y;
+                while (!this.checkCollision(this.currentPiece, 0, ghostY - this.currentPiece.y + 1)) {
+                    ghostY++;
+                }
+                return ghostY;
+            }
+            
+            lockPiece() {
+                for (const [bx, by] of this.currentPiece.getBlocks()) {
+                    if (by >= 0) {
+                        for (let gy = 0; gy < GRAINS_PER_BLOCK; gy++) {
+                            for (let gx = 0; gx < GRAINS_PER_BLOCK; gx++) {
+                                const grainX = bx * GRAINS_PER_BLOCK + gx;
+                                const grainY = by * GRAINS_PER_BLOCK + gy;
+                                this.grainGrid[grainY][grainX] = new SandGrain(
+                                    grainX, grainY, this.currentPiece.color
+                                );
+                            }
+                        }
+                    } else {
+                        this.gameOver = true;
+                        return;
+                    }
+                }
+                
+                this.currentPiece = this.nextPiece;
+                this.nextPiece = this.fromBag();
+                
+                if (this.checkCollision(this.currentPiece)) {
+                    this.gameOver = true;
+                }
+            }
+            
+            updateSand() {
+                let moved = false;
+                
+                for (let y = GRAIN_GRID_HEIGHT - 1; y >= 0; y--) {
+                    for (let x = 0; x < GRAIN_GRID_WIDTH; x++) {
+                        const grain = this.grainGrid[y][x];
+                        if (grain === null) continue;
+                        
+                        if (y + 1 < GRAIN_GRID_HEIGHT && this.grainGrid[y + 1][x] === null) {
+                            this.grainGrid[y][x] = null;
+                            this.grainGrid[y + 1][x] = grain;
+                            grain.y++;
+                            moved = true;
+                            continue;
+                        }
+                        
+                        const canLeft = x > 0 && y + 1 < GRAIN_GRID_HEIGHT && 
+                                       this.grainGrid[y + 1][x - 1] === null;
+                        const canRight = x < GRAIN_GRID_WIDTH - 1 && y + 1 < GRAIN_GRID_HEIGHT && 
+                                        this.grainGrid[y + 1][x + 1] === null;
+                        
+                        let direction = 0;
+                        if (canLeft && canRight) {
+                            direction = Math.random() < 0.5 ? -1 : 1;
+                        } else if (canLeft) {
+                            direction = -1;
+                        } else if (canRight) {
+                            direction = 1;
+                        } else {
+                            continue;
+                        }
+                        
+                        this.grainGrid[y][x] = null;
+                        this.grainGrid[y + 1][x + direction] = grain;
+                        grain.x += direction;
+                        grain.y++;
+                        moved = true;
+                    }
+                }
+                
+                return moved;
+            }
+            
+            findConnectedPath(startX, startY, color) {
+                if (this.grainGrid[startY][startX] === null) return [];
+                
+                const visited = [];
+                const queue = [[startX, startY]];
+                const seen = new Set([`${startX},${startY}`]);
+                
+                while (queue.length > 0) {
+                    const [x, y] = queue.shift();
+                    visited.push([x, y]);
+                    
+                    for (const [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0],[1,1],[1,-1],[-1,1],[-1,-1]]) {
+                        const nx = x + dx;
+                        const ny = y + dy;
+                        const key = `${nx},${ny}`;
+                        
+                        if (seen.has(key)) continue;
+                        if (nx < 0 || nx >= GRAIN_GRID_WIDTH || ny < 0 || ny >= GRAIN_GRID_HEIGHT) continue;
+                        if (this.grainGrid[ny][nx] === null) continue;
+                        
+                        const grainColor = this.grainGrid[ny][nx].color;
+                        if (!this.colorsMatch(grainColor, color)) continue;
+                        
+                        seen.add(key);
+                        queue.push([nx, ny]);
+                    }
+                }
+                
+                return visited;
+            }
+            
+            colorsMatch(c1, c2) {
+                const threshold = 30;
+                return c1.every((val, i) => Math.abs(val - c2[i]) < threshold);
+            }
+            
+            clearPaths() {
+                const checkedColors = new Set();
+                
+                for (let y = 0; y < GRAIN_GRID_HEIGHT; y++) {
+                    if (this.grainGrid[y][0] !== null) {
+                        const color = this.grainGrid[y][0].color;
+                        const colorKey = `${Math.floor(color[0]/30)},${Math.floor(color[1]/30)},${Math.floor(color[2]/30)}`;
+                        
+                        if (checkedColors.has(colorKey)) continue;
+                        checkedColors.add(colorKey);
+                        
+                        const connected = this.findConnectedPath(0, y, color);
+                        const reachesRight = connected.some(([x]) => x === GRAIN_GRID_WIDTH - 1);
+                        
+                        if (reachesRight) {
+                            this.clearing = true;
+                            this.clearQueue = connected.reverse();
+                            return true;
+                        }
+                    }
+                }
+                
+                return false;
+            }
+            
+            updateClearAnimation() {
+                if (!this.clearing) return;
+                
+                this.clearTimer++;
+                
+                if (this.clearTimer >= this.clearFlashDuration) {
+                    for (const [x, y] of this.clearQueue) {
+                        if (this.grainGrid[y][x] !== null) {
+                            const color = this.grainGrid[y][x].color;
+                            if (Math.random() < 0.1) {
+                                this.particles.push(new ClearParticle(x, y, color));
+                            }
+                        }
+                        this.grainGrid[y][x] = null;
+                    }
+                    
+                    this.clearing = false;
+                    this.clearTimer = 0;
+                    this.clearQueue = [];
+                    this.clears++;
+                    document.getElementById('clearCount').textContent = this.clears;
+                    
+                    if (this.clears % 5 === 0 && this.dropSpeed > 10) {
+                        this.dropSpeed -= 2;
+                    }
+                }
+            }
+            
+            handleInput() {
+                if (!this.keys['ArrowLeft'] && !this.keys['ArrowRight']) {
+                    this.holdingInput = false;
+                    this.moveTimer = 0;
+                }
+                
+                if (this.keys['ArrowLeft'] && !this.keys['ArrowRight']) {
+                    if (this.moveTimer <= 0) {
+                        if (!this.checkCollision(this.currentPiece, -1, 0)) {
+                            this.currentPiece.x--;
+                        }
+                        this.moveTimer = this.holdingInput ? this.moveRepeatDelay : this.moveDelay;
+                        this.holdingInput = true;
+                    }
+                }
+                
+                if (this.keys['ArrowRight'] && !this.keys['ArrowLeft']) {
+                    if (this.moveTimer <= 0) {
+                        if (!this.checkCollision(this.currentPiece, 1, 0)) {
+                            this.currentPiece.x++;
+                        }
+                        this.moveTimer = this.holdingInput ? this.moveRepeatDelay : this.moveDelay;
+                        this.holdingInput = true;
+                    }
+                }
+                
+                if (this.keys['ArrowDown']) {
+                    if (!this.checkCollision(this.currentPiece, 0, 1)) {
+                        this.currentPiece.y++;
+                        this.dropTimer = 0;
+                    }
+                }
+            }
+            
+            draw() {
+                ctx.fillStyle = BLACK;
+                ctx.fillRect(0, 0, WIDTH, HEIGHT);
+                
+                // Draw grid
+                ctx.strokeStyle = GRAY;
+                ctx.lineWidth = 1;
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    for (let x = 0; x < GRID_WIDTH; x++) {
+                        ctx.strokeRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                    }
+                }
+                
+                // Draw sand grains
+                for (let y = 0; y < GRAIN_GRID_HEIGHT; y++) {
+                    for (let x = 0; x < GRAIN_GRID_WIDTH; x++) {
+                        if (this.grainGrid[y][x] !== null) {
+                            const grain = this.grainGrid[y][x];
+                            ctx.fillStyle = `rgb(${grain.color[0]}, ${grain.color[1]}, ${grain.color[2]})`;
+                            ctx.fillRect(x * GRAIN_SIZE, y * GRAIN_SIZE, GRAIN_SIZE, GRAIN_SIZE);
+                        }
+                    }
+                }
+                
+                // Draw particles
+                for (const particle of this.particles) {
+                    particle.draw(ctx);
+                }
+                
+                if (!this.gameOver) {
+                    // Draw ghost piece
+                    const ghostY = this.getGhostY();
+                    if (ghostY !== this.currentPiece.y) {
+                        ctx.globalAlpha = 0.3;
+                        ctx.fillStyle = `rgb(${this.currentPiece.color[0]}, ${this.currentPiece.color[1]}, ${this.currentPiece.color[2]})`;
+                        for (const [x, y] of this.currentPiece.getBlocks()) {
+                            const ghostDrawY = y + (ghostY - this.currentPiece.y);
+                            if (ghostDrawY >= 0) {
+                                ctx.fillRect(x * BLOCK_SIZE, ghostDrawY * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                            }
+                        }
+                        ctx.globalAlpha = 1;
+                    }
+                    
+                    // Draw current piece
+                    ctx.fillStyle = `rgb(${this.currentPiece.color[0]}, ${this.currentPiece.color[1]}, ${this.currentPiece.color[2]})`;
+                    for (const [x, y] of this.currentPiece.getBlocks()) {
+                        if (y >= 0) {
+                            ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                        }
+                    }
+                }
+                
+                // Draw next piece
+                const previewX = WIDTH - 100;
+                const previewY = 20;
+                ctx.fillStyle = WHITE;
+                ctx.font = '24px monospace';
+                ctx.fillText('NEXT', previewX, previewY);
+                
+                ctx.fillStyle = `rgb(${this.nextPiece.color[0]}, ${this.nextPiece.color[1]}, ${this.nextPiece.color[2]})`;
+                for (let rowIdx = 0; rowIdx < this.nextPiece.shape.length; rowIdx++) {
+                    for (let colIdx = 0; colIdx < this.nextPiece.shape[rowIdx].length; colIdx++) {
+                        if (this.nextPiece.shape[rowIdx][colIdx]) {
+                            ctx.fillRect(
+                                previewX + colIdx * BLOCK_SIZE,
+                                previewY + 30 + rowIdx * BLOCK_SIZE,
+                                BLOCK_SIZE,
+                                BLOCK_SIZE
+                            );
+                        }
+                    }
+                }
+                
+                if (this.gameOver) {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+                    ctx.fillStyle = WHITE;
+                    ctx.font = '48px monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('GAME OVER', WIDTH / 2, HEIGHT / 2);
+                    ctx.textAlign = 'left';
+                }
+            }
+            
+            update() {
+                if (this.gameOver) return;
+                
+                this.handleInput();
+                
+                if (this.moveTimer > 0) {
+                    this.moveTimer--;
+                }
+                
+                this.particles = this.particles.filter(p => p.update());
+                
+                this.updateClearAnimation();
+                
+                if (!this.clearing) {
+                    this.dropTimer++;
+                    if (this.dropTimer >= this.dropSpeed) {
+                        this.dropTimer = 0;
+                        if (!this.checkCollision(this.currentPiece, 0, 1)) {
+                            this.currentPiece.y++;
+                        } else {
+                            this.lockPiece();
+                        }
+                    }
+                    
+                    this.sandUpdateCounter++;
+                    if (this.sandUpdateCounter >= this.sandUpdateSpeed) {
+                        this.sandUpdateCounter = 0;
+                        const sandMoved = this.updateSand();
+                        
+                        if (!sandMoved) {
+                            this.clearPaths();
+                        }
+                    }
+                }
+            }
+        }
+        
+        let game = new Game();
+        
+        document.addEventListener('keydown', (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+                e.preventDefault();
+            }
+            
+            game.keys[e.key] = true;
+            
+            if (!game.gameOver) {
+                if (e.key === 'ArrowUp') {
+                    const oldShape = game.currentPiece.shape.map(row => [...row]);
+                    game.currentPiece.rotate();
+                    if (game.checkCollision(game.currentPiece)) {
+                        let kicked = false;
+                        for (const offset of [-1, 1, -2, 2]) {
+                            if (!game.checkCollision(game.currentPiece, offset, 0)) {
+                                game.currentPiece.x += offset;
+                                kicked = true;
+                                break;
+                            }
+                        }
+                        if (!kicked) {
+                            game.currentPiece.shape = oldShape;
+                        }
+                    }
+                } else if (e.key === ' ') {
+                    while (!game.checkCollision(game.currentPiece, 0, 1)) {
+                        game.currentPiece.y++;
+                    }
+                    game.lockPiece();
+                    game.dropTimer = 0;
+                }
+            }
+            
+            if (e.key === 'r' || e.key === 'R') {
+                game = new Game();
+                document.getElementById('clearCount').textContent = '0';
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            game.keys[e.key] = false;
+        });
+        
+        // Mobile controls
+        const btnLeft = document.getElementById('btnLeft');
+        const btnRight = document.getElementById('btnRight');
+        const btnDown = document.getElementById('btnDown');
+        const btnRotate = document.getElementById('btnRotate');
+        const btnDrop = document.getElementById('btnDrop');
+        const btnRestart = document.getElementById('btnRestart');
+        
+        let moveInterval = null;
+        
+        btnLeft.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            game.keys['ArrowLeft'] = true;
+            game.holdingInput = false;
+            game.moveTimer = 0;
+        });
+        
+        btnLeft.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            game.keys['ArrowLeft'] = false;
+        });
+        
+        btnRight.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            game.keys['ArrowRight'] = true;
+            game.holdingInput = false;
+            game.moveTimer = 0;
+        });
+        
+        btnRight.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            game.keys['ArrowRight'] = false;
+        });
+        
+        btnDown.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            game.keys['ArrowDown'] = true;
+        });
+        
+        btnDown.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            game.keys['ArrowDown'] = false;
+        });
+        
+        btnRotate.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!game.gameOver) {
+                const oldShape = game.currentPiece.shape.map(row => [...row]);
+                game.currentPiece.rotate();
+                if (game.checkCollision(game.currentPiece)) {
+                    let kicked = false;
+                    for (const offset of [-1, 1, -2, 2]) {
+                        if (!game.checkCollision(game.currentPiece, offset, 0)) {
+                            game.currentPiece.x += offset;
+                            kicked = true;
+                            break;
+                        }
+                    }
+                    if (!kicked) {
+                        game.currentPiece.shape = oldShape;
+                    }
+                }
+            }
+        });
+        
+        btnDrop.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!game.gameOver) {
+                while (!game.checkCollision(game.currentPiece, 0, 1)) {
+                    game.currentPiece.y++;
+                }
+                game.lockPiece();
+                game.dropTimer = 0;
+            }
+        });
+        
+        btnRestart.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            game = new Game();
+            document.getElementById('clearCount').textContent = '0';
+        });
+        
+        // Also support mouse clicks for desktop testing
+        btnLeft.addEventListener('mousedown', () => {
+            game.keys['ArrowLeft'] = true;
+            game.holdingInput = false;
+            game.moveTimer = 0;
+        });
+        btnLeft.addEventListener('mouseup', () => { game.keys['ArrowLeft'] = false; });
+        
+        btnRight.addEventListener('mousedown', () => {
+            game.keys['ArrowRight'] = true;
+            game.holdingInput = false;
+            game.moveTimer = 0;
+        });
+        btnRight.addEventListener('mouseup', () => { game.keys['ArrowRight'] = false; });
+        
+        btnDown.addEventListener('mousedown', () => { game.keys['ArrowDown'] = true; });
+        btnDown.addEventListener('mouseup', () => { game.keys['ArrowDown'] = false; });
+        
+        btnRotate.addEventListener('click', () => {
+            if (!game.gameOver) {
+                const oldShape = game.currentPiece.shape.map(row => [...row]);
+                game.currentPiece.rotate();
+                if (game.checkCollision(game.currentPiece)) {
+                    let kicked = false;
+                    for (const offset of [-1, 1, -2, 2]) {
+                        if (!game.checkCollision(game.currentPiece, offset, 0)) {
+                            game.currentPiece.x += offset;
+                            kicked = true;
+                            break;
+                        }
+                    }
+                    if (!kicked) {
+                        game.currentPiece.shape = oldShape;
+                    }
+                }
+            }
+        });
+        
+        btnDrop.addEventListener('click', () => {
+            if (!game.gameOver) {
+                while (!game.checkCollision(game.currentPiece, 0, 1)) {
+                    game.currentPiece.y++;
+                }
+                game.lockPiece();
+                game.dropTimer = 0;
+            }
+        });
+        
+        btnRestart.addEventListener('click', () => {
+            game = new Game();
+            document.getElementById('clearCount').textContent = '0';
+        });
+        
+        function gameLoop() {
+            game.update();
+            game.draw();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        gameLoop();
+    </script>
+</body>
+</html>

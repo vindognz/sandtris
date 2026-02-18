@@ -21,12 +21,10 @@ WHITE = (255, 255, 255)
 
 # 4 color palette
 COLORS = [
-    (210, 50, 50),  # Red
-    #(255, 150, 0), # Orange
-    (100, 150, 255), # Blue
-    (100, 255, 150), # Green
-    (255, 220, 100), # Yellow
-    #(128, 0, 128),   # Purple
+    (255, 100, 100),  # Red
+    (100, 150, 255),  # Blue
+    (100, 255, 150),  # Green
+    (255, 220, 100),  # Yellow
 ]
 
 # Tetromino shapes
@@ -277,7 +275,8 @@ class Game:
                 
                 if reaches_right:
                     self.clearing = True
-                    self.clear_queue = list(reversed(connected))
+                    self.clear_queue = connected
+                    self.clear_timer = 0
                     return True
         
         return False
@@ -351,8 +350,16 @@ class Game:
             for x in range(GRAIN_GRID_WIDTH):
                 if self.grain_grid[y][x] is not None:
                     grain = self.grain_grid[y][x]
+                    
+                    # Flash white if clearing
+                    color = grain.color
+                    if self.clearing and (x, y) in self.clear_queue:
+                        # Flash white on frames 0-5 and 10-15
+                        if (self.clear_timer < 6) or (10 <= self.clear_timer < 16):
+                            color = WHITE
+                    
                     rect = pygame.Rect(x * GRAIN_SIZE, y * GRAIN_SIZE, GRAIN_SIZE, GRAIN_SIZE)
-                    pygame.draw.rect(self.screen, grain.color, rect)
+                    pygame.draw.rect(self.screen, color, rect)
         
         # Draw clear particles
         for particle in self.particles:
